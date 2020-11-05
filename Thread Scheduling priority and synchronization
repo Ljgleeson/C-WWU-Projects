@@ -1,0 +1,141 @@
+/* Liam Gleeson
+Assignment 1
+CSCI 247
+*/
+
+#include <time.h>
+#include <stdio.h>
+#include <string.h>
+#include <stdbool.h>
+#include <pthread.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/time.h>
+#include <inttypes.h>
+
+//#defines
+#define MAX_THREAD_COUNT 9
+#define MAX_TASK_COUNT 3
+
+//Typedefs
+typedef struct{
+	int threadCount;
+	pthread_t threadId;
+	int threadPolicy;
+	int threadPri;
+	long processTime;
+	int64_t timeStamp[MAX_TASK_COUNT + 1];
+	time_t startTime;
+	time_t endTime;
+} ThreadArgs;
+
+//Globals
+
+pthread_mutex_t g_ThreadMutex [MAX_THREAD_COUNT];
+pthread_cond_t g_conditionVar [MAX_THREAD_COUNT];
+ThreadArgs g_ThreadArgs[MAX_THREAD_COUNT];
+
+void InitGlobals(void);
+void DisplayThreadSchdAttributes(pthread_t, int, int);
+void DisplayThreadArgs(ThreadArgs*);
+void DoProcess(void);
+void* threadFunction(void *arg);
+
+void InitGlobals(void){
+	for (int i = 0; i < MAX_THREAD_COUNT; i++) {
+		g_ThreadArgs[i].threadCount = i;
+		g_ThreadArgs[i].threadPri = 15;
+		if(i < 3 ){
+			g_ThreadArgs[i].threadPolicy = SCHED_FIFO;
+		} else if (i > 2 && i < 6) {
+			g_ThreadArgs[i].threadPolicy = SCHED_RR;
+		} else {
+			g_ThreadArgs[i].threadPolicy = SCHED_OTHER;
+		}
+	}
+}
+
+void DisplayThreadSchdAttributes( pthread_t threadID, int policy, int priority ){
+
+	printf("\nDisplayThreadSchdAttributes:\n threadID = 0x%lx\n policy = %s\n priority = %d\n",
+									threadID,
+									(policy == SCHED_FIFO) ? "SCHED_FIFO" :
+									(policy == SCHED_RR)	? "SCHED_RR" :
+									(policy == SCHED_OTHER) ? "SCHED_OTHER" :
+									"???",
+									priority);
+}
+
+void DisplayThreadArgs(ThreadArgs*	myThreadArg){ //displaying thread args
+	int i,y;
+	if( myThreadArg ) {
+	DisplayThreadSchdAttributes(myThreadArg->threadId, myThreadArg->threadPolicy, myThreadArg->threadPri);
+	printf(" startTime = %s endTime = %s", ctime(&myThreadArg->startTime), ctime(&myThreadArg->endTime));
+	printf(" TimeStamp [%"PRId64"]\n", myThreadArg->timeStamp[0] );
+
+	for(y=1; y<MAX_TASK_COUNT+1; y++){
+		printf(" TimeStamp [%"PRId64"] Delta [%"PRId64"]us\n", myThreadArg->timeStamp[y],
+		(myThreadArg->timeStamp[y]-myThreadArg->timeStamp[y-1]));
+	}
+ }
+}
+
+void DoProcess(void)
+{
+	unsigned int longVar = 1;
+	while(longVar < 0xfffffff) longVar++;
+}
+
+void* threadFunction(void *arg)
+{
+  ThreadArgs*	myThreadArg; //typecast the ThreadArgs to a threadargs variable
+  myThreadArg = (ThreadArgs*)arg;
+	pthread_setschedparam(myThreadArg->threadId, myThreadArg->threadPolicy, myThreadArg->threadPri); // settng thread policy
+	pthread_mutex_lock ( &g_ThreadMutex[myThreadArg->threadCount] ); // initalizing associated mutex
+	pthread_cond_wait ( &g_conditionVar[myThreadArg->threadCount], &g_ThreadMutex[myThreadArg->threadCount] );
+	pthread_mutex_unlock( &g_ThreadMutex[myThreadArg->threadCount] );
+ 	struct timespec tms;
+	clock_gettime(CLOCK_REALTIME, &tms); // getting the first stamp prior to running
+	myThreadArg->timeStamp[0] = tms.tv_sec *1000000;
+	myThreadArg->timeStamp[0] += tms.tv_nsec/1000;
+	if(tms.tv_nsec % 1000 >= 500 ){
+		myThreadArg->timeStamp[0]++;
+	}
+	int i = 0;
+	while (i < 3) {
+		DoProcess(); //call DoProcess to run the task
+		clock_gettime(CLOCK_REALTIME, &tms); // finding end time
+		myThreadArg->timeStamp[i+1] = tms.tv_sec *1000000;
+		myThreadArg->timeStamp[i+1] += tms.tv_nsec/1000;
+		if(tms.tv_nsec % 1000 >= 500 ) {
+			myThreadArg->timeStamp[i+1]++;
+	} i++;
+ }
+}
+
+int main (int argc, char *argv[]){
+	InitGlobals(); // call InitGlobals
+  for (int i = 0; i < MAX_THREAD_COUNT; i++) { //creating 9 threads
+		pthread_create(&(g_ThreadArgs[i].threadId), NULL, *threadFunction, &g_ThreadArgs[i]); // takes 4 arguments, 1. reference to thread struct. 2. pthread attributes. 3. function that is the entry point for new thread.
+	}																																											// 4. value you want to send the function./*
+	for (int i = 0; i < MAX_THREAD_COUNT; i++) { //signlaing the condition variables
+		pthread_cond_signal(&g_conditionVar[i]);
+	}
+	for (int i = 0; i < MAX_THREAD_COUNT; i++) { //calling pthread_join to wait on the thread and displaying the stats on the threads
+		pthread_join(g_ThreadArgs[i].threadId, NULL);
+		DisplayThreadArgs(&g_ThreadArgs[i]);
+	}
+	exit(0);
+}
+
+/*
+Thread analysis:
+When analyzing the difference between FIFO, RR, and OTHER Schedules, I noticed some differences between the delta's of each timestamp.
+First, FIFO seems to differ from RR and Other in the changes between timestamps. FIFO seems to work by continuning one thread until it is
+complete and then moving to the next one (hence first in, first out). On the other side RR seems to work on a time cycle and will run it for
+that specific time and then goes to the next one, meaning when one finishes the others will around the same time. The Other schedule also seems to be
+following this idea as it is the default linux time-sharing scheduler. Off of this basis, it seems that RR and OTHER will have more similar timestamps
+while FIFO can have greater variety amongst the delta's of each timestamp. The maximum number of threads you can run in a given policy depends on the number of
+cores and CPU sockets as the more you have the more threads you can run at once.
+
+*/
